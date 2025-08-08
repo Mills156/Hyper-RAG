@@ -1,5 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Graphin } from '@antv/graphin';
+import { Card, Button, List } from 'antd';
+import { InfoCircleOutlined, EyeOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 
 const colors = [
     '#F6BD16',
@@ -36,6 +38,20 @@ const RetrievalHyperGraph = ({
     mode = 'hyper' // 新增mode参数，默认为hyper模式
 }) => {
     const edgesName = mode === 'hyper' ? '超边' : '边'
+    const [selectedHyperedge, setSelectedHyperedge] = useState(null);
+    const [showHyperedgePanel, setShowHyperedgePanel] = useState(false);
+    const [hyperedgeList, setHyperedgeList] = useState([]);
+
+    // 选择超边
+    const handleSelectHyperedge = (edge) => {
+        setSelectedHyperedge(edge);
+    };
+
+    // 切换超边面板显示
+    const toggleHyperedgePanel = () => {
+        setShowHyperedgePanel(!showHyperedgePanel);
+    };
+
     // 转换数据格式为HyperGraph组件需要的格式
     const convertedData = useMemo(() => {
         // 如果没有数据，返回空
@@ -94,6 +110,21 @@ const RetrievalHyperGraph = ({
         return { vertices, edges };
     }, [entities, hyperedges]);
 
+    // 生成超边列表
+    useEffect(() => {
+        if (convertedData && convertedData.edges && mode === 'hyper') {
+            const edges = Object.keys(convertedData.edges).map((key, index) => ({
+                key,
+                data: convertedData.edges[key],
+                color: colors[index % colors.length],
+                nodes: key.split('|#|')
+            }));
+            setHyperedgeList(edges);
+        } else {
+            setHyperedgeList([]);
+        }
+    }, [convertedData, mode]);
+
     const options = useMemo(() => {
         const hyperData = {
             nodes: [],
@@ -132,13 +163,15 @@ const RetrievalHyperGraph = ({
             } else {
                 // hyper模式：使用原有的bubble-sets插件
                 // 创建样式函数
-                const createStyle = (baseColor) => ({
-                    fill: baseColor,
-                    stroke: baseColor,
-                    labelFill: '#fff',
-                    labelPadding: 2,
-                    labelBackgroundFill: baseColor,
-                    labelBackgroundRadius: 5,
+                const createStyle = (baseColor, isSelected = false) => ({
+                    fill: isSelected ? `${baseColor}cc` : `${baseColor}66`,
+                    stroke: isSelected ? baseColor : `${baseColor}88`,
+                    strokeWidth: isSelected ? 4 : 2,
+                    labelFill: isSelected ? '#000' : '#666',
+                    labelFontSize: isSelected ? 14 : 12,
+                    labelPadding: 4,
+                    labelBackgroundFill: isSelected ? baseColor : `${baseColor}cc`,
+                    labelBackgroundRadius: 6,
                     labelPlacement: 'center',
                     labelAutoRotate: false,
                     // bubblesets配置
@@ -163,18 +196,20 @@ const RetrievalHyperGraph = ({
                     const key = edgeKeys[i];
                     const edge = convertedData.edges[key];
                     const nodes = key.split('|#|');
+                    const isSelected = selectedHyperedge && selectedHyperedge.key === key;
+                    const baseColor = colors[i % colors.length];
 
                     plugins.push({
                         key: `bubble-sets-${key}`,
                         type: 'bubble-sets',
                         members: nodes,
-                        // labelText: String(edge.keywords || ''), // 确保labelText是字符串
-                        ...createStyle(colors[i % colors.length]),
+                        labelText: isSelected && edge.keywords ? edge.keywords.slice(0, 15) + (edge.keywords.length > 15 ? '...' : '') : '',
+                        ...createStyle(baseColor, isSelected),
                     });
                 }
             }
 
-            // 添加tooltip插件
+            // 添加节点tooltip插件
             if (showTooltip) {
                 plugins.push({
                     type: 'tooltip',
@@ -239,7 +274,7 @@ const RetrievalHyperGraph = ({
             },
             plugins: mode === 'graph' ? (showTooltip ? plugins : []) : plugins,
         };
-    }, [convertedData, showTooltip, mode]);
+    }, [convertedData, showTooltip, mode, selectedHyperedge]);
 
     // 如果没有数据，不显示组件
     if (!convertedData || (!entities.length && !hyperedges.length)) {
@@ -247,7 +282,7 @@ const RetrievalHyperGraph = ({
     }
 
     return (
-        <div style={{ height, width, ...containerStyle }}>
+        <div style={{ height, width, ...containerStyle, position: 'relative' }}>
             <div style={{
                 marginBottom: '8px',
                 fontSize: '14px',
@@ -257,9 +292,21 @@ const RetrievalHyperGraph = ({
                 alignItems: 'center'
             }}>
                 <span>检索结果可视化 - {mode}</span>
-                <span style={{ fontSize: '12px' }}>
-                    {edgesName}: {hyperedges.length}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '12px' }}>
+                        {edgesName}: {hyperedges.length}
+                    </span>
+                    {mode === 'hyper' && hyperedges.length > 0 && (
+                        <Button
+                            type="primary"
+                            icon={showHyperedgePanel ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+                            onClick={toggleHyperedgePanel}
+                            size="small"
+                        >
+                            {showHyperedgePanel ? '隐藏' : '显示'}超边
+                        </Button>
+                    )}
+                </div>
             </div>
             <Graphin
                 options={options}
@@ -284,6 +331,125 @@ const RetrievalHyperGraph = ({
                     );
                 }}
             />
+
+            {/* 超边信息面板 */}
+            {showHyperedgePanel && mode === 'hyper' && hyperedgeList.length > 0 && (
+                <div style={{
+                    position: 'absolute',
+                    top: '40px',
+                    right: '10px',
+                    width: '280px',
+                    maxHeight: '65%',
+                    backgroundColor: 'white',
+                    border: '1px solid #d9d9d9',
+                    borderRadius: '6px',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                    zIndex: 1000,
+                    overflow: 'hidden'
+                }}>
+                    <Card
+                        title={
+                            <span>
+                                <InfoCircleOutlined style={{ marginRight: '8px' }} />
+                                超边列表 ({hyperedgeList.length})
+                            </span>
+                        }
+                        size="small"
+                        style={{ height: '100%' }}
+                        bodyStyle={{ padding: '12px', maxHeight: '350px', overflow: 'auto' }}
+                    >
+                        <List
+                            dataSource={hyperedgeList}
+                            size="small"
+                            renderItem={(edge, index) => (
+                                <List.Item
+                                    style={{
+                                        cursor: 'pointer',
+                                        backgroundColor: selectedHyperedge?.key === edge.key ? '#e6f7ff' : 'transparent',
+                                        borderRadius: '4px',
+                                        margin: '4px 0',
+                                        padding: '6px',
+                                        border: selectedHyperedge?.key === edge.key ? '1px solid #1890ff' : '1px solid transparent'
+                                    }}
+                                    onClick={() => handleSelectHyperedge(edge)}
+                                >
+                                    <div style={{ width: '100%' }}>
+                                        <div style={{ 
+                                            display: 'flex', 
+                                            alignItems: 'center', 
+                                            marginBottom: '4px' 
+                                        }}>
+                                            <div
+                                                style={{
+                                                    width: '10px',
+                                                    height: '10px',
+                                                    backgroundColor: edge.color,
+                                                    borderRadius: '2px',
+                                                    marginRight: '6px',
+                                                    border: '1px solid rgba(0,0,0,0.1)'
+                                                }}
+                                            />
+                                            <span style={{ fontSize: '11px', fontWeight: 'bold' }}>
+                                                超边 {index + 1}
+                                            </span>
+                                        </div>
+                                        <div style={{ fontSize: '10px', color: '#666', marginBottom: '3px' }}>
+                                            节点: {edge.nodes.slice(0, 3).join(' • ')}{edge.nodes.length > 3 ? '...' : ''}
+                                        </div>
+                                        {edge.data.keywords && (
+                                            <div style={{ fontSize: '10px', color: '#1890ff' }}>
+                                                关键词: {edge.data.keywords.slice(0, 25)}...
+                                            </div>
+                                        )}
+                                    </div>
+                                </List.Item>
+                            )}
+                        />
+                        
+                        {selectedHyperedge && (
+                            <Card 
+                                size="small" 
+                                title="选中超边详情" 
+                                style={{ marginTop: '12px' }}
+                                bodyStyle={{ padding: '8px' }}
+                            >
+                                <div style={{ fontSize: '11px' }}>
+                                    <div style={{ marginBottom: '6px' }}>
+                                        <strong>包含节点:</strong><br/>
+                                        <span style={{ color: '#1890ff' }}>
+                                            {selectedHyperedge.nodes.join(' • ')}
+                                        </span>
+                                    </div>
+                                    {selectedHyperedge.data.keywords && (
+                                        <div style={{ marginBottom: '6px' }}>
+                                            <strong>关键词:</strong><br/>
+                                            <span style={{ color: '#52c41a' }}>
+                                                {selectedHyperedge.data.keywords}
+                                            </span>
+                                        </div>
+                                    )}
+                                    {selectedHyperedge.data.description && (
+                                        <div style={{ marginBottom: '6px' }}>
+                                            <strong>描述:</strong><br/>
+                                            <span style={{ color: '#722ed1' }}>
+                                                {selectedHyperedge.data.description}
+                                            </span>
+                                        </div>
+                                    )}
+                                    {selectedHyperedge.data.weight && (
+                                        <div>
+                                            <strong>权重:</strong> 
+                                            <span style={{ color: '#fa8c16' }}>
+                                                {selectedHyperedge.data.weight}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                            </Card>
+                        )}
+                    </Card>
+                </div>
+            )}
         </div>
     );
 };
