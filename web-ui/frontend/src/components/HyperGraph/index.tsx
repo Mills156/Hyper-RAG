@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { Graphin } from '@antv/graphin';
 import { Spin, message } from 'antd';
 
@@ -37,6 +37,9 @@ const HyperGraph = ({
 }) => {
     const [data, setData] = useState(undefined);
     const [loading, setLoading] = useState(false);
+    const [hoveredHyperedge, setHoveredHyperedge] = useState(null);
+    const [hyperedgeTooltip, setHyperedgeTooltip] = useState({ visible: false, x: 0, y: 0, content: '' });
+    const graphRef = useRef(null);
 
     // 获取vertex邻居数据
     const fetchVertexNeighbor = async (vId, db) => {
@@ -87,30 +90,33 @@ return;
             }
 
             // 创建样式函数
-            const createStyle = (baseColor) => ({
-                fill: baseColor,
-                stroke: baseColor,
-                // labelFill: '#fff',
-                // labelPadding: 2,
-                // labelBackgroundFill: baseColor,
-                // labelBackgroundRadius: 5,
-                // labelPlacement: 'center',
-                // labelAutoRotate: false,
-                // bubblesets配置
-                maxRoutingIterations: 100,
-                maxMarchingIterations: 20,
-                pixelGroup: 4,
-                edgeR0: 10,
-                edgeR1: 60,
-                nodeR0: 15,
-                nodeR1: 50,
-                morphBuffer: 10,
-                threshold: 4,
-                memberInfluenceFactor: 1,
-                edgeInfluenceFactor: 4,
-                nonMemberInfluenceFactor: -0.8,
-                virtualEdges: true,
-            });
+            const createStyle = (baseColor, edgeKey) => {
+                const isHovered = hoveredHyperedge === edgeKey;
+                return {
+                    fill: isHovered ? baseColor + 'CC' : baseColor + '33', // 更明显的透明度变化
+                    stroke: isHovered ? baseColor : baseColor + 'AA',
+                    lineWidth: isHovered ? 3 : 2,
+                    opacity: isHovered ? 1 : 0.7,
+                    cursor: 'pointer',
+                    // 添加阴影效果
+                    shadowColor: isHovered ? baseColor : 'transparent',
+                    shadowBlur: isHovered ? 10 : 0,
+                    // bubblesets配置
+                    maxRoutingIterations: 100,
+                    maxMarchingIterations: 20,
+                    pixelGroup: 4,
+                    edgeR0: 10,
+                    edgeR1: 60,
+                    nodeR0: 15,
+                    nodeR1: 50,
+                    morphBuffer: 10,
+                    threshold: 4,
+                    memberInfluenceFactor: 1,
+                    edgeInfluenceFactor: 4,
+                    nonMemberInfluenceFactor: -0.8,
+                    virtualEdges: true,
+                };
+            };
 
             // 添加超边
             const edgeKeys = Object.keys(data.edges);
@@ -123,8 +129,12 @@ return;
                     key: `bubble-sets-${key}`,
                     type: 'bubble-sets',
                     members: nodes,
-                    // labelText: edge.keywords || '',
-                    ...createStyle(colors[i % colors.length]),
+                    // 存储超边信息供后续使用
+                    data: {
+                        edgeKey: key,
+                        ...edge
+                    },
+                    ...createStyle(colors[i % colors.length], key),
                 });
             }
 
@@ -192,8 +202,97 @@ return;
                 linkDistance: 150,
             },
             plugins,
+            // 添加事件监听
+            onReady: (graph) => {
+                graphRef.current = graph;
+
+                // 监听canvas鼠标移动事件
+                graph.on('canvas:mousemove', (e) => {
+                    handleCanvasMouseMove(e);
+                });
+
+                graph.on('canvas:mouseleave', () => {
+                    setHoveredHyperedge(null);
+                    setHyperedgeTooltip({ visible: false, x: 0, y: 0, content: '' });
+                });
+            },
         };
-    }, [data, vertexId, showTooltip]);
+    }, [data, vertexId, showTooltip, hoveredHyperedge]);
+
+    // 处理画布鼠标移动事件
+    const handleCanvasMouseMove = (e) => {
+        if (!data || !graphRef.current) return;
+
+        const point = { x: e.x, y: e.y };
+        const edgeKeys = Object.keys(data.edges);
+        
+        // 检查每个超边的包围区域
+        let foundHyperedge = null;
+        
+        for (const edgeKey of edgeKeys) {
+            const nodes = edgeKey.split('|#|');
+            const nodePositions = nodes.map(nodeId => {
+                const node = graphRef.current.getNodeData(nodeId);
+                if (node) {
+                    return graphRef.current.getElementPosition(nodeId);
+                }
+                return null;
+            }).filter(pos => pos !== null);
+
+            // 简单的包围盒检测
+            if (nodePositions.length >= 2) {
+                const minX = Math.min(...nodePositions.map(p => p.x)) - 50;
+                const maxX = Math.max(...nodePositions.map(p => p.x)) + 50;
+                const minY = Math.min(...nodePositions.map(p => p.y)) - 50;
+                const maxY = Math.max(...nodePositions.map(p => p.y)) + 50;
+
+                if (point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY) {
+                    foundHyperedge = edgeKey;
+                    break;
+                }
+            }
+        }
+
+        if (foundHyperedge !== hoveredHyperedge) {
+            setHoveredHyperedge(foundHyperedge);
+            
+            if (foundHyperedge) {
+                const edge = data.edges[foundHyperedge];
+                const nodes = foundHyperedge.split('|#|');
+                
+                // 生成更详细的tooltip内容
+                let nodeDetails = nodes.map(nodeId => {
+                    const vertex = data.vertices[nodeId];
+                    if (vertex) {
+                        return `<li>${nodeId}${vertex.entity_type ? ` (${vertex.entity_type})` : ''}</li>`;
+                    }
+                    return `<li>${nodeId}</li>`;
+                }).join('');
+
+                setHyperedgeTooltip({
+                    visible: true,
+                    x: e.clientX,
+                    y: e.clientY,
+                    content: `
+                        <div style="padding: 12px; max-width: 350px;">
+                            <h4 style="margin: 0 0 8px 0; font-size: 15px; font-weight: bold; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 6px;">超边信息</h4>
+                            <div style="margin: 8px 0;">
+                                <strong style="color: #ffa726;">包含节点 (${nodes.length}):</strong>
+                                <ul style="margin: 4px 0 8px 20px; padding: 0; list-style: circle;">
+                                    ${nodeDetails}
+                                </ul>
+                            </div>
+                            ${edge.keywords ? `<p style="margin: 6px 0;"><strong style="color: #66bb6a;">关键词:</strong> ${edge.keywords}</p>` : ''}
+                            ${edge.description ? `<p style="margin: 6px 0;"><strong style="color: #42a5f5;">描述:</strong> ${edge.description.substring(0, 100)}${edge.description.length > 100 ? '...' : ''}</p>` : ''}
+                            ${edge.weight !== undefined ? `<p style="margin: 6px 0;"><strong style="color: #ab47bc;">权重:</strong> ${edge.weight}</p>` : ''}
+                        </div>
+                    `
+                });
+            } else {
+                setHyperedgeTooltip({ visible: false, x: 0, y: 0, content: '' });
+            }
+        }
+    };
 
     if (loading) {
         return (
@@ -225,20 +324,44 @@ return;
     }
 
     return (
-        <div style={{ height, width, ...containerStyle }}>
-            <Graphin
-                options={options}
-                id={graphId}
-                style={{ width: '100%', height: '100%' }}
-                error={() => {
-                    return <div>
-                        <div>
+        <>
+            <div style={{ height, width, ...containerStyle }}>
+                <Graphin
+                    options={options}
+                    id={graphId}
+                    style={{ width: '100%', height: '100%' }}
+                    error={() => {
+                        return <div>
+                            <div>
 
+                            </div>
                         </div>
-                    </div>
-                }}
-            />
-        </div>
+                    }}
+                />
+            </div>
+            {/* 自定义超边tooltip */}
+            {hyperedgeTooltip.visible && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        left: hyperedgeTooltip.x + 10,
+                        top: hyperedgeTooltip.y - 10,
+                        background: 'rgba(0, 0, 0, 0.9)',
+                        color: 'white',
+                        borderRadius: '8px',
+                        padding: '4px',
+                        pointerEvents: 'none',
+                        zIndex: 9999,
+                        fontSize: '13px',
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.25)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        maxHeight: '300px',
+                        overflow: 'auto',
+                    }}
+                    dangerouslySetInnerHTML={{ __html: hyperedgeTooltip.content }}
+                />
+            )}
+        </>
     );
 };
 
