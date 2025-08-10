@@ -284,19 +284,61 @@ const RetrievalHyperGraph = ({
         const graph = (graphRef.current as any)?.graph;
         if (!graph || !convertedData) return;
 
-        const handleMouseMove = (e: any) => {
-            const target: any = e?.target;
-            let targetName = target?.cfg?.name || '';
-            let targetId = target?.cfg?.id || '';
-            if (!targetName && target?.getParent) {
-                const p = target.getParent();
-                targetName = p?.cfg?.name || '';
-                targetId = p?.cfg?.id || targetId;
+        const findBubbleKeyFromShape = (shape: any): string | null => {
+            let current = shape;
+            for (let i = 0; i < 5 && current; i++) {
+                const name = current?.cfg?.name || '';
+                const id = current?.cfg?.id || '';
+                const idOrName = `${name} ${id}`;
+                const match = idOrName.match(/bubble-sets-([^\s]+)/);
+                if (match && match[1]) return match[1];
+                current = current?.getParent ? current.getParent() : null;
             }
-            const idOrName = `${targetName} ${targetId}`;
-            const match = idOrName.match(/bubble-sets-([^\s]+)/);
-            if (match && match[1]) {
-                const key = match[1];
+            return null;
+        };
+
+        const approxDetectByBBox = (canvasX: number, canvasY: number): string | null => {
+            if (!convertedData) return null;
+            const keys = Object.keys(convertedData.edges || {});
+            const pt = graph.getPointByCanvas?.(canvasX, canvasY) || { x: canvasX, y: canvasY };
+            const gx = pt.x;
+            const gy = pt.y;
+            const inflate = 60;
+            for (let i = 0; i < keys.length; i++) {
+                const key = keys[i];
+                const members: string[] = key.split('|#|');
+                let minX = Number.POSITIVE_INFINITY;
+                let minY = Number.POSITIVE_INFINITY;
+                let maxX = Number.NEGATIVE_INFINITY;
+                let maxY = Number.NEGATIVE_INFINITY;
+                let valid = false;
+                members.forEach((id) => {
+                    const item = graph.findById(id);
+                    const model = item?.getModel?.();
+                    if (model && typeof model.x === 'number' && typeof model.y === 'number') {
+                        valid = true;
+                        minX = Math.min(minX, model.x);
+                        minY = Math.min(minY, model.y);
+                        maxX = Math.max(maxX, model.x);
+                        maxY = Math.max(maxY, model.y);
+                    }
+                });
+                if (!valid) continue;
+                minX -= inflate; minY -= inflate; maxX += inflate; maxY += inflate;
+                if (gx >= minX && gx <= maxX && gy >= minY && gy <= maxY) {
+                    return key;
+                }
+            }
+            return null;
+        };
+
+        const handleMouseMove = (e: any) => {
+            const keyFromShape = findBubbleKeyFromShape(e?.target);
+            let key: string | null = keyFromShape;
+            if (!key) {
+                key = approxDetectByBBox(e.canvasX, e.canvasY);
+            }
+            if (key) {
                 if (hoveredHyperedgeKey !== key) setHoveredHyperedgeKey(key);
                 if (showTooltip && containerRef.current) {
                     const rect = containerRef.current.getBoundingClientRect();
@@ -319,9 +361,11 @@ const RetrievalHyperGraph = ({
         };
 
         graph.on('mousemove', handleMouseMove);
+        graph.on('canvas:mousemove', handleMouseMove);
         graph.on('canvas:mouseleave', handleLeave);
         return () => {
             graph.off('mousemove', handleMouseMove);
+            graph.off('canvas:mousemove', handleMouseMove);
             graph.off('canvas:mouseleave', handleLeave);
         };
     }, [mode, convertedData, hoveredHyperedgeKey, showTooltip, tooltip.visible]);
